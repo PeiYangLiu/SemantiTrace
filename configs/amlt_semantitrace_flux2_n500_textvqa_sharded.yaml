@@ -1,0 +1,232 @@
+description: |
+  TextVQA-focused sharded SemantiTrace FLUX.2 Klein generation run. Uses four
+  1000-image TextVQA OCR shards exported from lmms-lab/TextVQA and merges the
+  output with the previous sharded v2 merged suite to push toward n=500.
+
+target:
+  service: singularity
+  name: msrresrchbasicvc
+  workspace_name: Workspace_NLC
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+
+code:
+  local_dir: .
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: v-peiyangliu
+    mount_dir: /mnt/output
+    is_output: true
+
+jobs:
+  - name: semantitrace-flux2-n500-textvqa-a100x4
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euxo pipefail
+        LOG_ROOT=$$OUTPUT_ROOT/bootstrap_logs
+        mkdir -p "$$LOG_ROOT"
+        (
+          echo "job=$$AMLT_JOB_NAME rank=$$RANK node_rank=$$NODE_RANK world_size=$$WORLD_SIZE"
+          pwd
+          nvidia-smi
+
+          PY=/opt/conda/envs/ptca/bin/python
+          if [ ! -x "$$PY" ]; then
+            PY=python
+          fi
+          "$$PY" -V
+          "$$PY" -m pip install --upgrade pip wheel setuptools
+          "$$PY" -m pip install -r requirements-real.txt hf-transfer
+          "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true
+          "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+          "$$PY" -m pip install "diffusers>=0.38.0" "transformers>=5.9.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+          "$$PY" - <<'PY'
+        import importlib
+        for name in ["torch", "transformers", "diffusers", "open_clip", "easyocr", "PIL", "cv2"]:
+            module = importlib.import_module(name)
+            print(name, getattr(module, "__version__", "unknown"))
+        PY
+
+          mkdir -p "$$OUTPUT_ROOT"
+          cp configs/semantitrace_flux2_klein_gradient_guided.yaml "$$OUTPUT_ROOT/config_semantitrace_flux2_klein_gradient_guided.yaml"
+          test -d "$$UPLOADED_MODEL_SNAPSHOTS/flux"
+          test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+          export FLUX_SNAPSHOT="$$UPLOADED_MODEL_SNAPSHOTS/flux"
+          export QWEN_SNAPSHOT="$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+          echo "Using FLUX_SNAPSHOT=$$FLUX_SNAPSHOT"
+          echo "Using QWEN_SNAPSHOT=$$QWEN_SNAPSHOT"
+          "$$PY" - <<'PY'
+        import os, yaml
+        src = "configs/semantitrace_flux2_klein_gradient_guided.yaml"
+        dst = "/tmp/semantitrace_flux2_klein_gradient_guided_textvqa.yaml"
+        cfg = yaml.safe_load(open(src, "r", encoding="utf-8"))
+        cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"] = os.environ["FLUX_SNAPSHOT"]
+        cfg["models"]["surrogate_vlm"] = os.environ["QWEN_SNAPSHOT"]
+        cfg.setdefault("anchor_mining", {})
+        cfg["anchor_mining"]["num_clusters"] = 1200
+        cfg["anchor_mining"]["cluster_multiplier"] = 120
+        cfg["anchor_mining"]["top_candidates_per_cluster"] = 80
+        cfg["anchor_mining"]["max_anchors_per_cluster"] = 5
+        cfg.setdefault("semantic_canvas_filter", {})
+        cfg["semantic_canvas_filter"]["max_candidates"] = 36
+        cfg.setdefault("quality_gate", {})
+        cfg["quality_gate"]["max_attempts"] = 4
+        with open(dst, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False)
+        print(open(dst, "r", encoding="utf-8").read())
+        PY
+
+          git rev-parse HEAD > "$$OUTPUT_ROOT/git_head.txt" 2>/dev/null || true
+
+          "$$PY" - <<'PY'
+        import open_clip
+        model, _, _ = open_clip.create_model_and_transforms("ViT-L-14", pretrained="openai", device="cpu")
+        print("OpenCLIP ViT-L/14 warmup complete")
+        PY
+
+          export EASYOCR_MODULE_PATH=/scratch/easyocr_shared
+          mkdir -p "$$EASYOCR_MODULE_PATH"
+          "$$PY" - <<'PY'
+        import easyocr
+        reader = easyocr.Reader(["en"], gpu=False)
+        print("EasyOCR warmup complete", reader.model_storage_directory)
+        PY
+
+          run_shard() {
+            local sid="$$1"
+            local gpu="$$2"
+            local data_dir="$$3"
+            local target="$$4"
+            local shard_dir="$$OUTPUT_ROOT/shards/shard_$${sid}"
+            mkdir -p "$$shard_dir"
+            (
+              export CUDA_VISIBLE_DEVICES="$$gpu"
+              export EASYOCR_MODULE_PATH=/scratch/easyocr_shared
+              echo "Starting TextVQA shard=$$sid gpu=$$gpu data=$$data_dir target=$$target"
+              "$$PY" scripts/run_injection.py \
+                --dataset_dir "$$data_dir" \
+                --output_dir "$$shard_dir" \
+                --config /tmp/semantitrace_flux2_klein_gradient_guided_textvqa.yaml \
+                --num_canaries "$$target" \
+                --device cuda \
+                --resume
+              "$$PY" - <<PY
+        import json
+        from pathlib import Path
+        root = Path("$$shard_dir")
+        rec = root / "canary_records.json"
+        rej = root / "rejected_attempts.jsonl"
+        summary = {
+            "shard": "$$sid",
+            "dataset_dir": "$$data_dir",
+            "accepted_canaries": len(json.loads(rec.read_text())) if rec.exists() else 0,
+            "rejected_attempts": len(rej.read_text().splitlines()) if rej.exists() else 0,
+            "target_canaries": int("$$target"),
+        }
+        (root / "shard_generation_summary.json").write_text(json.dumps(summary, indent=2))
+        print(json.dumps(summary, indent=2))
+        PY
+            ) 2>&1 | tee "$$LOG_ROOT/shard_$${sid}.log"
+          }
+
+          run_shard 0 0 "$$DATASET_DIR_0" "$$SHARD_TARGET" &
+          pid0=$$!
+          run_shard 1 1 "$$DATASET_DIR_1" "$$SHARD_TARGET" &
+          pid1=$$!
+          run_shard 2 2 "$$DATASET_DIR_2" "$$SHARD_TARGET" &
+          pid2=$$!
+          run_shard 3 3 "$$DATASET_DIR_3" "$$SHARD_TARGET" &
+          pid3=$$!
+          wait $$pid0 $$pid1 $$pid2 $$pid3
+
+          "$$PY" - <<'PY'
+        import json, os
+        from pathlib import Path
+
+        output_root = Path(os.environ["OUTPUT_ROOT"])
+        previous_root = Path(os.environ["PREVIOUS_MERGED_ROOT"])
+        shard_roots = [output_root / "shards" / f"shard_{i}" for i in range(4)]
+        merge_root = output_root / "merged"
+        merge_root.mkdir(parents=True, exist_ok=True)
+
+        records = []
+        seen_signatures = set()
+        source_summaries = []
+        all_rejections = []
+
+        def add_record(rec, label):
+            sig = str(rec.get("trap_signature", ""))
+            if not sig or sig in seen_signatures:
+                return
+            new = json.loads(json.dumps(rec))
+            new["source_merge_label"] = label
+            new["source_record_id"] = rec.get("id")
+            new["id"] = f"canary-{len(records):04d}"
+            records.append(new)
+            seen_signatures.add(sig)
+
+        prev_path = previous_root / "canary_records_all.json"
+        prev_rej = previous_root / "rejected_attempts_merged.jsonl"
+        prev_records = json.loads(prev_path.read_text()) if prev_path.exists() else []
+        prev_rejections = [line for line in prev_rej.read_text().splitlines() if line.strip()] if prev_rej.exists() else []
+        source_summaries.append({"label": "previous_sharded_v2", "root": str(previous_root), "accepted_canaries": len(prev_records), "rejected_attempts": len(prev_rejections)})
+        for rec in prev_records:
+            add_record(rec, "previous_sharded_v2")
+        all_rejections.extend(prev_rejections)
+
+        for root in shard_roots:
+            label = root.name
+            rec_path = root / "canary_records.json"
+            rej_path = root / "rejected_attempts.jsonl"
+            recs = json.loads(rec_path.read_text()) if rec_path.exists() else []
+            rejs = [line for line in rej_path.read_text().splitlines() if line.strip()] if rej_path.exists() else []
+            source_summaries.append({"label": label, "root": str(root), "accepted_canaries": len(recs), "rejected_attempts": len(rejs)})
+            all_rejections.extend(json.dumps({"source": label, "record": json.loads(line)}, ensure_ascii=False) for line in rejs)
+            for rec in recs:
+                add_record(rec, label)
+
+        (merge_root / "canary_records_all.json").write_text(json.dumps(records, indent=2, ensure_ascii=False))
+        first500 = records[:500]
+        (merge_root / "canary_records_first500.json").write_text(json.dumps(first500, indent=2, ensure_ascii=False))
+        (merge_root / "rejected_attempts_merged.jsonl").write_text("\n".join(all_rejections) + ("\n" if all_rejections else ""))
+        summary = {
+            "merged_unique_canaries": len(records),
+            "first500_canaries": len(first500),
+            "rejected_attempts_merged": len(all_rejections),
+            "target_canaries": 500,
+            "source_summaries": source_summaries,
+        }
+        (merge_root / "merged_generation_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        PY
+        ) 2>&1 | tee -a "$$LOG_ROOT/bootstrap.log"
+        rc=$${PIPESTATUS[0]}
+        exit $$rc
+    submit_args:
+      env:
+        SHARD_TARGET: "120"
+        DATASET_DIR_0: /mnt/default/data/semantitrace_textvqa_ocr_shard0_20260604
+        DATASET_DIR_1: /mnt/default/data/semantitrace_textvqa_ocr_shard1_20260604
+        DATASET_DIR_2: /mnt/default/data/semantitrace_textvqa_ocr_shard2_20260604
+        DATASET_DIR_3: /mnt/default/data/semantitrace_textvqa_ocr_shard3_20260604
+        PREVIOUS_MERGED_ROOT: /mnt/output/semantitrace_flux2_n500_sharded_v2/merged
+        OUTPUT_ROOT: /mnt/output/semantitrace_flux2_n500_textvqa_v1
+        UPLOADED_MODEL_SNAPSHOTS: /mnt/default/models/semantitrace_model_snapshots_20260603
+        HF_HOME: /scratch/hf_cache
+        HUGGINGFACE_HUB_CACHE: /scratch/hf_cache/hub
+        TRANSFORMERS_CACHE: /scratch/hf_cache/transformers
+        HF_HUB_ENABLE_HF_TRANSFER: "1"
+        PIP_CACHE_DIR: /scratch/pip_cache
+        XDG_CACHE_HOME: /scratch/xdg_cache
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

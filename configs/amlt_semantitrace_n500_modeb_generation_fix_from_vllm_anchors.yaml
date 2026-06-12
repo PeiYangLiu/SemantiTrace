@@ -1,0 +1,200 @@
+description: |
+  Generation-only fix for Mode-B natural-object canaries. The vLLM anchor mining
+  run already produced 20 shards x 250 anchors. The previous generation command
+  mistakenly re-sharded each 250-anchor shard by GLOBAL_SHARDS=20, so each GPU
+  only tried about 12 anchors. This job reuses the existing anchor shards and
+  runs each generation shard with shard_count=1, target 25 accepted canaries.
+
+target:
+  service: singularity
+  name: msrresrchbasicvc
+  workspace_name: Workspace_NLC
+
+environment:
+  image: semantitrace/qwen36-vllm-nightly:20260607fix2
+  registry: acrnlc.azurecr.io
+
+code:
+  local_dir: .
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: v-peiyangliu
+    mount_dir: /mnt/output
+    is_output: true
+
+jobs:
+  - name: n500-modeb-genfix-group-00
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail
+        PY=python3
+        "$$PY" -m pip install --upgrade pip wheel setuptools
+        "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true
+        "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+        "$$PY" -m pip install "diffusers>=0.38.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/flux"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        src = "configs/semantitrace_flux2_klein_gradient_guided.yaml"
+        dst = "/tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml"
+        cfg = yaml.safe_load(open(src, "r", encoding="utf-8"))
+        cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/flux"
+        cfg["models"]["surrogate_vlm"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/qwen"
+        with open(dst, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False)
+        print(open(dst, "r", encoding="utf-8").read())
+        PYCFG
+        GROUP=0
+        run_local_shard() {
+          local local_gpu="$$1"
+          local gid=$$((GROUP * 4 + local_gpu))
+          local source_records="$$ANCHOR_ROOT/shard_$${gid}/anchor_records.json"
+          local gen_dir="$$OUTPUT_ROOT/generation_shards/shard_$${gid}"
+          mkdir -p "$$gen_dir"
+          (
+            export CUDA_VISIBLE_DEVICES="$$local_gpu"
+            echo "[generation-fix] group=$${GROUP} gid=$${gid} gpu=$${local_gpu} source=$$source_records"
+            "$$PY" scripts/run_nontext_modeb_natural_generation.py \
+              --source_records "$$source_records" \
+              --output_dir "$$gen_dir" \
+              --config /tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml \
+              --num_canaries "$$GEN_TARGET_PER_SHARD" \
+              --shard_count 1 \
+              --shard_index 0 \
+              --planner_mode free \
+              --max_attempts "$$MAX_ATTEMPTS" \
+              --min_masked_delta "$$MIN_MASKED_DELTA" \
+              --device cuda
+            touch "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.done"
+          ) 2>&1 | tee "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.log"
+        }
+        run_local_shard 0 & p0=$$!
+        run_local_shard 1 & p1=$$!
+        run_local_shard 2 & p2=$$!
+        run_local_shard 3 & p3=$$!
+        wait $$p0 $$p1 $$p2 $$p3
+        echo "[done] generation-fix group $${GROUP} complete"
+    submit_args:
+      env: &genfix_env
+        ANCHOR_ROOT: /mnt/output/semantitrace_n500_modeb_specific_full_5job_vllm_20260608/anchor_shards
+        OUTPUT_ROOT: /mnt/output/semantitrace_n500_modeb_specific_generation_fix_20260608
+        UPLOADED_MODEL_SNAPSHOTS: /mnt/default/models/semantitrace_model_snapshots_20260603
+        GEN_TARGET_PER_SHARD: "25"
+        MAX_ATTEMPTS: "4"
+        MIN_MASKED_DELTA: "0.05"
+        HF_HOME: /scratch/hf_cache
+        HUGGINGFACE_HUB_CACHE: /scratch/hf_cache/hub
+        TRANSFORMERS_CACHE: /scratch/hf_cache/transformers
+        HF_HUB_ENABLE_HF_TRANSFER: "1"
+        PIP_CACHE_DIR: /scratch/pip_cache
+        XDG_CACHE_HOME: /scratch/xdg_cache
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+
+  - name: n500-modeb-genfix-group-01
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail
+        PY=python3
+        "$$PY" -m pip install --upgrade pip wheel setuptools
+        "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true
+        "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+        "$$PY" -m pip install "diffusers>=0.38.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        src = "configs/semantitrace_flux2_klein_gradient_guided.yaml"; dst = "/tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml"
+        cfg = yaml.safe_load(open(src, "r", encoding="utf-8")); cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/flux"; cfg["models"]["surrogate_vlm"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/qwen"
+        with open(dst, "w", encoding="utf-8") as f: yaml.safe_dump(cfg, f, sort_keys=False)
+        PYCFG
+        GROUP=1
+        run_local_shard() { local local_gpu="$$1"; local gid=$$((GROUP * 4 + local_gpu)); local source_records="$$ANCHOR_ROOT/shard_$${gid}/anchor_records.json"; local gen_dir="$$OUTPUT_ROOT/generation_shards/shard_$${gid}"; mkdir -p "$$gen_dir"; (export CUDA_VISIBLE_DEVICES="$$local_gpu"; "$$PY" scripts/run_nontext_modeb_natural_generation.py --source_records "$$source_records" --output_dir "$$gen_dir" --config /tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml --num_canaries "$$GEN_TARGET_PER_SHARD" --shard_count 1 --shard_index 0 --planner_mode free --max_attempts "$$MAX_ATTEMPTS" --min_masked_delta "$$MIN_MASKED_DELTA" --device cuda; touch "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.done") 2>&1 | tee "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.log"; }
+        run_local_shard 0 & p0=$$!; run_local_shard 1 & p1=$$!; run_local_shard 2 & p2=$$!; run_local_shard 3 & p3=$$!; wait $$p0 $$p1 $$p2 $$p3
+    submit_args:
+      env: *genfix_env
+
+  - name: n500-modeb-genfix-group-02
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail; PY=python3
+        "$$PY" -m pip install --upgrade pip wheel setuptools; "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true; "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"; "$$PY" -m pip install "diffusers>=0.38.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        cfg=yaml.safe_load(open("configs/semantitrace_flux2_klein_gradient_guided.yaml")); cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/flux"; cfg["models"]["surrogate_vlm"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/qwen"
+        yaml.safe_dump(cfg, open("/tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml","w"), sort_keys=False)
+        PYCFG
+        GROUP=2
+        run_local_shard() { local local_gpu="$$1"; local gid=$$((GROUP * 4 + local_gpu)); local source_records="$$ANCHOR_ROOT/shard_$${gid}/anchor_records.json"; local gen_dir="$$OUTPUT_ROOT/generation_shards/shard_$${gid}"; mkdir -p "$$gen_dir"; (export CUDA_VISIBLE_DEVICES="$$local_gpu"; "$$PY" scripts/run_nontext_modeb_natural_generation.py --source_records "$$source_records" --output_dir "$$gen_dir" --config /tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml --num_canaries "$$GEN_TARGET_PER_SHARD" --shard_count 1 --shard_index 0 --planner_mode free --max_attempts "$$MAX_ATTEMPTS" --min_masked_delta "$$MIN_MASKED_DELTA" --device cuda; touch "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.done") 2>&1 | tee "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.log"; }
+        run_local_shard 0 & p0=$$!; run_local_shard 1 & p1=$$!; run_local_shard 2 & p2=$$!; run_local_shard 3 & p3=$$!; wait $$p0 $$p1 $$p2 $$p3
+    submit_args:
+      env: *genfix_env
+
+  - name: n500-modeb-genfix-group-03
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail; PY=python3
+        "$$PY" -m pip install --upgrade pip wheel setuptools; "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true; "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"; "$$PY" -m pip install "diffusers>=0.38.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        cfg=yaml.safe_load(open("configs/semantitrace_flux2_klein_gradient_guided.yaml")); cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/flux"; cfg["models"]["surrogate_vlm"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/qwen"
+        yaml.safe_dump(cfg, open("/tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml","w"), sort_keys=False)
+        PYCFG
+        GROUP=3
+        run_local_shard() { local local_gpu="$$1"; local gid=$$((GROUP * 4 + local_gpu)); local source_records="$$ANCHOR_ROOT/shard_$${gid}/anchor_records.json"; local gen_dir="$$OUTPUT_ROOT/generation_shards/shard_$${gid}"; mkdir -p "$$gen_dir"; (export CUDA_VISIBLE_DEVICES="$$local_gpu"; "$$PY" scripts/run_nontext_modeb_natural_generation.py --source_records "$$source_records" --output_dir "$$gen_dir" --config /tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml --num_canaries "$$GEN_TARGET_PER_SHARD" --shard_count 1 --shard_index 0 --planner_mode free --max_attempts "$$MAX_ATTEMPTS" --min_masked_delta "$$MIN_MASKED_DELTA" --device cuda; touch "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.done") 2>&1 | tee "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.log"; }
+        run_local_shard 0 & p0=$$!; run_local_shard 1 & p1=$$!; run_local_shard 2 & p2=$$!; run_local_shard 3 & p3=$$!; wait $$p0 $$p1 $$p2 $$p3
+    submit_args:
+      env: *genfix_env
+
+  - name: n500-modeb-genfix-group-04
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail; PY=python3
+        "$$PY" -m pip install --upgrade pip wheel setuptools; "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true; "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"; "$$PY" -m pip install "diffusers>=0.38.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        cfg=yaml.safe_load(open("configs/semantitrace_flux2_klein_gradient_guided.yaml")); cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/flux"; cfg["models"]["surrogate_vlm"]=os.environ["UPLOADED_MODEL_SNAPSHOTS"]+"/qwen"
+        yaml.safe_dump(cfg, open("/tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml","w"), sort_keys=False)
+        PYCFG
+        GROUP=4
+        run_local_shard() { local local_gpu="$$1"; local gid=$$((GROUP * 4 + local_gpu)); local source_records="$$ANCHOR_ROOT/shard_$${gid}/anchor_records.json"; local gen_dir="$$OUTPUT_ROOT/generation_shards/shard_$${gid}"; mkdir -p "$$gen_dir"; (export CUDA_VISIBLE_DEVICES="$$local_gpu"; "$$PY" scripts/run_nontext_modeb_natural_generation.py --source_records "$$source_records" --output_dir "$$gen_dir" --config /tmp/semantitrace_flux2_klein_gradient_guided_modeb_specific.yaml --num_canaries "$$GEN_TARGET_PER_SHARD" --shard_count 1 --shard_index 0 --planner_mode free --max_attempts "$$MAX_ATTEMPTS" --min_masked_delta "$$MIN_MASKED_DELTA" --device cuda; touch "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.done") 2>&1 | tee "$$OUTPUT_ROOT/generation_shards/shard_$${gid}.log"; }
+        run_local_shard 0 & p0=$$!; run_local_shard 1 & p1=$$!; run_local_shard 2 & p2=$$!; run_local_shard 3 & p3=$$!; wait $$p0 $$p1 $$p2 $$p3
+    submit_args:
+      env: *genfix_env

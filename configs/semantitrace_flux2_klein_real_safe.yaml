@@ -1,0 +1,127 @@
+defaults:
+  seed: 42
+
+backends:
+  encoder: open_clip
+  ocr: easyocr
+  mask_generator: grid
+  vlm: qwen_vl
+  editor: flux2_klein_inpaint
+
+models:
+  inpaint_model: "black-forest-labs/FLUX.2-klein-9B"
+  clip_model: "ViT-L-14"
+  clip_pretrained: "openai"
+  surrogate_vlm: "Qwen/Qwen3-VL-8B-Instruct"
+
+vlm:
+  torch_dtype: "bfloat16"
+
+mask_generator:
+  min_size: 28
+  rows: 6
+  cols: 6
+  cell_fraction: 0.70
+
+anchor_mining:
+  num_clusters: 400
+  cluster_multiplier: 80
+  knn_k: 10
+  min_canvas_area_ratio: 0.0015
+  max_canvas_area_ratio: 0.055
+  ocr_confidence_threshold: 0.30
+  top_candidates_per_cluster: 40
+  max_anchors_per_cluster: 3
+  kmeans_iters: 25
+  enable_face_filter: true
+  max_face_overlap_ratio: 0.0
+  enable_skin_filter: true
+  max_skin_ratio: 0.30
+  max_text_skin_ratio: 0.75
+  enable_body_zone_filter: true
+  max_body_zone_overlap_ratio: 0.0
+  body_zone_x_scale: 3.0
+  body_zone_y_scale: 5.0
+  body_zone_y_offset: -0.10
+  allow_structural_fallback: false
+  min_text_alnum: 4
+  max_text_alnum: 5
+  max_text_words: 2
+  max_non_alnum_ratio: 0.12
+  min_letter_ratio: 0.75
+  max_consecutive_consonants: 4
+  reject_numeric_text: true
+  reject_short_lowercase_text: true
+  short_text_length: 3
+  min_short_text_uppercase_ratio: 0.70
+  reject_edge_text: true
+  edge_margin_ratio: 0.004
+  max_short_text_bbox_area_ratio: 0.020
+  max_text_bbox_area_per_alnum_ratio: 0.012
+  prefer_short_text: true
+
+semantic_canvas_filter:
+  enabled: true
+  max_candidates: 24
+  crop_review_enabled: true
+  crop_review_padding_ratio: 0.75
+  crop_review_min_crop_size: 224
+
+canary_generation:
+  acronym_length: [3, 5]
+  num_probe_queries: 3
+  vlm_temperature: 0.0
+  max_retries: 2
+  match_text_signature_length: true
+  derive_text_signature_from_original: false
+  forbidden_signature_letters: "JQX"
+
+dual_guided_diffusion:
+  lambda_ret: 2.5
+  lambda_gen: 4.0
+  eta: 0.5
+  num_ddim_steps: 30
+  guidance_scale: 8.0
+  require_gradient_editor: false
+
+editor:
+  image_size: 768
+  num_inference_steps: 40
+  guidance_scale: 8.0
+  strength: 0.92
+  torch_dtype: "bfloat16"
+  max_mask_area_ratio: 0.010
+  max_text_mask_area_ratio: 0.035
+  min_mask_width: 72
+  min_mask_height: 24
+  label_aspect_ratio: 2.8
+  mask_feather_radius: 4.0
+  text_span_replacement: true
+  text_replacement_unit: "full"
+  text_bbox_padding_ratio: 0.12
+  max_quality_local_delta: 0.24
+  max_quality_boundary_delta: 0.12
+  min_text_length_ratio: 0.75
+  max_text_length_ratio: 1.35
+  min_style_foreground_fraction: 0.015
+  max_sequence_length: 512
+
+quality_gate:
+  enabled: true
+  max_attempts: 3
+
+naturalness_gate:
+  enabled: true
+  crop_padding_ratio: 0.55
+  min_crop_size: 192
+
+readability_gate:
+  enabled: true
+  crop_padding_ratio: 0.45
+  min_crop_size: 160
+
+verification:
+  num_canaries: 100
+  num_probes_per_canary: 3
+  significance_level: 0.01
+  retrieval_top_k: 3

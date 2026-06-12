@@ -1,0 +1,97 @@
+# Closest feasible local reproduction of the paper main tables.
+# Uses the downloaded 200-image MMQA/WebQA exports, N=100 canaries per dataset,
+# implemented baselines, real local retrievers, and local Qwen3-VL generation.
+# GPT/Gemini endpoint generators are included for table completeness and will be
+# recorded in skipped.csv unless their endpoint environment variables are set.
+
+run:
+  output_dir: "outputs/main_paper_local_n100"
+  seed: 42
+  device: "cuda"
+  num_workers: 1
+
+datasets:
+  MMQA:
+    image_dir: "data/mmqa/images"
+    manifest: "data/mmqa/manifest.json"
+    max_images: 200
+  WebQA:
+    image_dir: "data/webqa/images"
+    manifest: "data/webqa/manifest.json"
+    max_images: 200
+
+protocol:
+  num_canaries: 100
+  num_probe_queries: 3
+  retrieval_top_k: 3
+  dense_eval_subset: 10000
+  significance_level: 0.01
+
+methods:
+  - name: naive
+    type: naive
+  - name: pgd
+    type: pgd
+    epsilon: 0.03137254901960784
+  - name: aqua_acronym
+    type: aqua_acronym
+  - name: aqua_spatial
+    type: aqua_spatial
+  - name: semantitrace
+    type: semantitrace
+    config: "configs/semantitrace_inpaint_readable.yaml"
+
+retrievers:
+  - name: CLIP-ViT-L-14
+    backend: open_clip
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+  - name: SigLIP-SO400M
+    backend: siglip
+    model_name: "google/siglip-so400m-patch14-384"
+
+generators:
+  - name: Qwen3-VL-8B-Instruct
+    backend: qwen_vl
+    model_name: "Qwen/Qwen3-VL-8B-Instruct"
+  - name: GPT-5.2
+    backend: endpoint
+    endpoint_env: "SEMANTITRACE_GPT52_ENDPOINT"
+  - name: Gemini-3-Pro
+    backend: endpoint
+    endpoint_env: "SEMANTITRACE_GEMINI3_ENDPOINT"
+
+ood:
+  mahalanobis_percentile: 99.0
+  mahalanobis_regularization: 0.0001
+  mahalanobis_max_components: 16
+  mahalanobis_variance_keep: 0.95
+  vlm_filter:
+    enabled: false
+    backend: heuristic
+
+robustness:
+  enabled: true
+  operations:
+    - name: none
+      type: none
+    - name: jpeg_q75
+      type: jpeg
+      quality: 75
+    - name: jpeg_q50
+      type: jpeg
+      quality: 50
+    - name: rescale_0_5
+      type: rescale
+      scale: 0.5
+    - name: gaussian_sigma5
+      type: gaussian_noise
+      sigma: 5.0
+    - name: center_crop_10
+      type: center_crop
+      fraction: 0.1
+
+stealth:
+  compute_lpips: false
+  compute_fid: true
+  compute_psnr: true

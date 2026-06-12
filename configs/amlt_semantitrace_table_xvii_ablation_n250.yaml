@@ -1,0 +1,123 @@
+description: |
+  Artifact-backed Table XVII n=250 component ablation. Generates the three missing
+  ablation variants (without retrieval guidance, without signature guidance, and
+  without latent blending), reuses the canonical n=250 SemantiTrace images for
+  the full row, and measures Ret.Rank, LPIPS, Qwen3 CGSR, and CLIP-Mahalanobis
+  OOD rejection under a shared protocol.
+
+target:
+  service: singularity
+  name: msrresrchbasicvc
+  workspace_name: Workspace_NLC
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+
+code:
+  local_dir: .
+
+data:
+  local_dir: /home/v-peiyangliu/SemantiTracePaper/amlt_combined_a500_b500_records
+  remote_dir: data/semantitrace_combined_a500_b500_records_20260608
+  storage_id: default
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: v-peiyangliu
+    mount_dir: /mnt/output
+    is_output: true
+
+jobs:
+  - name: table-xvii-ablation-n250
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail
+        PY=/opt/conda/envs/ptca/bin/python
+        if [ ! -x "$$PY" ]; then PY=python; fi
+        "$$PY" -m pip install --upgrade pip wheel setuptools
+        "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true
+        "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+        "$$PY" -m pip install "diffusers>=0.38.0" "transformers>=5.9.0" "accelerate>=1.13.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        test -d "$$DATA_ROOT"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/flux"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        src = "configs/semantitrace_flux2_klein_gradient_guided.yaml"
+        dst = "/tmp/semantitrace_table_xvii_ablation.yaml"
+        cfg = yaml.safe_load(open(src, "r", encoding="utf-8"))
+        cfg.setdefault("models", {})
+        cfg["models"]["inpaint_model"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/flux"
+        cfg["models"]["surrogate_vlm"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/qwen"
+        cfg.setdefault("editor", {})
+        cfg["editor"]["enable_attention_slicing"] = True
+        with open(dst, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False)
+        print(open(dst, "r", encoding="utf-8").read())
+        PYCFG
+        mkdir -p "$$OUTPUT_ROOT"
+        run_generation_variant() {
+          local gpu="$$1"
+          local variant="$$2"
+          (
+            export CUDA_VISIBLE_DEVICES="$$gpu"
+            "$$PY" scripts/run_table_xvii_ablation_n250.py \
+              --records n_scaling_subsets_20260609/combined_a125_b125_n250.json \
+              --image_root "$$DATA_ROOT" \
+              --output_dir "$$OUTPUT_ROOT" \
+              --config /tmp/semantitrace_table_xvii_ablation.yaml \
+              --variants "$$variant" \
+              --max_records 250 \
+              --device cuda \
+              --generate_only
+            touch "$$OUTPUT_ROOT/$${variant}.generation.done"
+          ) 2>&1 | tee "$$OUTPUT_ROOT/$${variant}.generation.log"
+        }
+        run_generation_variant 0 without_ret & p0=$$!
+        run_generation_variant 1 without_sig & p1=$$!
+        run_generation_variant 2 without_blending & p2=$$!
+        (
+          export CUDA_VISIBLE_DEVICES=3
+          "$$PY" scripts/run_table_xvii_ablation_n250.py \
+            --records n_scaling_subsets_20260609/combined_a125_b125_n250.json \
+            --image_root "$$DATA_ROOT" \
+            --output_dir "$$OUTPUT_ROOT" \
+            --config /tmp/semantitrace_table_xvii_ablation.yaml \
+            --variants full_semantitrace \
+            --max_records 250 \
+            --device cuda \
+            --generate_only
+          touch "$$OUTPUT_ROOT/full_semantitrace.generation.done"
+        ) 2>&1 | tee "$$OUTPUT_ROOT/full_semantitrace.generation.log" &
+        p3=$$!
+        wait $$p0 $$p1 $$p2 $$p3
+        export CUDA_VISIBLE_DEVICES=0
+        "$$PY" scripts/run_table_xvii_ablation_n250.py \
+          --records n_scaling_subsets_20260609/combined_a125_b125_n250.json \
+          --image_root "$$DATA_ROOT" \
+          --output_dir "$$OUTPUT_ROOT" \
+          --config /tmp/semantitrace_table_xvii_ablation.yaml \
+          --variants without_ret,without_sig,without_blending,full_semantitrace \
+          --max_records 250 \
+          --device cuda \
+          --evaluate_only \
+          --top_k 3
+    submit_args:
+      env:
+        DATA_ROOT: /mnt/default/data/semantitrace_combined_a500_b500_records_20260608
+        UPLOADED_MODEL_SNAPSHOTS: /mnt/default/models/semantitrace_model_snapshots_20260603
+        OUTPUT_ROOT: /mnt/output/semantitrace_table_xvii_ablation_n250_20260609
+        PIP_CACHE_DIR: /scratch/pip_cache
+        XDG_CACHE_HOME: /scratch/xdg_cache
+        HF_HOME: /scratch/hf_home
+        HF_HUB_ENABLE_HF_TRANSFER: "1"
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

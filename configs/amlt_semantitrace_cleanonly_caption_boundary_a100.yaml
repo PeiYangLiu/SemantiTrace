@@ -1,0 +1,103 @@
+description: |
+  Clean-only caption-only / caption-sidecar boundary rerun. Clean index contains
+  only distractors, not unwatermarked anchors. Runs caption_only and
+  caption_sidecar concurrently on msrresrchbasicvc 40G A100.
+
+target:
+  service: singularity
+  name: msrresrchbasicvc
+  workspace_name: Workspace_NLC
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+
+code:
+  local_dir: .
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: v-peiyangliu
+    mount_dir: /mnt/output
+    is_output: true
+
+jobs:
+  - name: cleanonly-caption-boundary
+    identity: managed
+    sku: 40G8-A100-IB-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command:
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail
+        PY=/opt/conda/envs/ptca/bin/python
+        if [ ! -x "$$PY" ]; then PY=python; fi
+        export PYTHONUSERBASE=/scratch/python_userbase
+        export PATH="$$PYTHONUSERBASE/bin:$$PATH"
+        "$$PY" -m pip install --user -r requirements-real.txt hf-transfer
+        "$$PY" -m pip install --user --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+        "$$PY" -m pip install --user "transformers>=5.9.0" "accelerate>=1.13.0" "opencv-python-headless>=4.10" "pillow>=12"
+        test -f "$$COMBINED_TAR"
+        test -f "$$DISTRACTOR_TAR"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        cfg = yaml.safe_load(open("configs/semantitrace_flux2_klein_gradient_guided.yaml", "r", encoding="utf-8"))
+        cfg.setdefault("models", {})
+        cfg["models"]["surrogate_vlm"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/qwen"
+        yaml.safe_dump(cfg, open("/tmp/semantitrace_caption_boundary.yaml", "w"), sort_keys=False)
+        PYCFG
+        LOCAL_ROOT=/scratch/cleanonly_caption_boundary
+        mkdir -p "$$LOCAL_ROOT" "$$OUTPUT_ROOT"
+        if [ ! -f "$$LOCAL_ROOT/.untar.done" ]; then
+          rm -rf "$$LOCAL_ROOT/data"
+          mkdir -p "$$LOCAL_ROOT/data"
+          tar -C "$$LOCAL_ROOT/data" -xf "$$COMBINED_TAR"
+          tar -C "$$LOCAL_ROOT/data" -xf "$$DISTRACTOR_TAR"
+          touch "$$LOCAL_ROOT/.untar.done"
+        fi
+        ln -sfn "$$LOCAL_ROOT/data/amlt_combined_a500_b500_records/images" images
+        run_profile() {
+          local profile="$$1"
+          local gpu="$$2"
+          local outdir="$$OUTPUT_ROOT/$${profile}"
+          if [ -f "$$outdir/end_to_end_profile_summary.json" ]; then
+            echo "[resume] profile $${profile} already complete"
+            return 0
+          fi
+          mkdir -p "$$outdir"
+          (
+            export CUDA_VISIBLE_DEVICES="$$gpu"
+            "$$PY" scripts/run_end_to_end_profiles.py \
+              --records "$$LOCAL_ROOT/data/amlt_combined_a500_b500_records/records/combined_a500_b500.json" \
+              --output_dir "$$outdir" \
+              --distractor_dirs "$$LOCAL_ROOT/data/distractors" \
+              --profiles "$$profile" \
+              --max_records 1000 \
+              --max_distractors 400 \
+              --top_k 3 \
+              --config /tmp/semantitrace_caption_boundary.yaml \
+              --device cuda
+            touch "$$OUTPUT_ROOT/$${profile}.done"
+          ) 2>&1 | tee "$$OUTPUT_ROOT/$${profile}.log"
+        }
+        run_profile caption_only 0 & p0=$$!
+        run_profile caption_sidecar 1 & p1=$$!
+        wait $$p0 $$p1
+        echo "[done] clean-only caption boundary complete"
+    submit_args:
+      env:
+        COMBINED_TAR: /mnt/default/data/semantitrace_phase4_caption_boundary_tars_20260609/combined_a500_b500_records.tar
+        DISTRACTOR_TAR: /mnt/default/data/semantitrace_phase4_caption_boundary_tars_20260609/n500_upgrade_distractors.tar
+        OUTPUT_ROOT: /mnt/output/semantitrace_cleanonly_caption_boundary_20260611
+        UPLOADED_MODEL_SNAPSHOTS: /mnt/default/models/semantitrace_model_snapshots_20260603
+        HF_HOME: /scratch/hf_cache
+        HUGGINGFACE_HUB_CACHE: /scratch/hf_cache/hub
+        TRANSFORMERS_CACHE: /scratch/hf_cache/transformers
+        HF_HUB_ENABLE_HF_TRANSFER: "1"
+        PIP_CACHE_DIR: /scratch/pip_cache
+        XDG_CACHE_HOME: /scratch/xdg_cache
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

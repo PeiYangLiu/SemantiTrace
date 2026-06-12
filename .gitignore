@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local environment
+.venv/
+.venv*/
+venv/
+env/
+.env
+.env.*
+
+# Generated experiment artifacts and downloaded corpora
+outputs/
+SemantiTrace_ICDE2027/
+n_scaling_subsets_*/
+data/
+data_expanded/
+data_scene_text/
+data_webqa_5000/
+data_textvqa_ocr_shards/
+data_large_retrieval/
+datasets/
+_w03_remaining.json
+
+# Model/checkpoint/cache directories
+.cache/
+amlt_hf_cache/
+amlt_model_snapshots/
+cache/
+checkpoints/
+models/
+wandb/
+
+# AMLT/local generated bundles and downloaded results
+amlt_*/
+amlt_results/
+modea_source_tars_*/
+phase*_bundles/
+*_export/
+*_review_*/
+nontext_badcase_export/
+modeb_natural_random10_export/
+modeb_natural_random10_review_*/
+ACMMM_reviews
+
+# Archives / submission bundles generated locally
+*.zip
+scripts/reproduce_icde_artifacts.sh
+scripts/redraw_icde_data_figures.py
+
+# Local AMLT project checkout metadata
+.amltconfig
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local paper PDFs for literature review
+pdfs/

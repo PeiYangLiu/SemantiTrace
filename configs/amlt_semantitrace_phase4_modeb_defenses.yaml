@@ -1,0 +1,225 @@
+description: |
+  Phase 4 Mode-B natural-object defenses over the 1M unique OpenImages pool.
+  Each defense job materializes defended Mode-B records locally on /scratch,
+  runs exact CLIP top-k retrieval over OpenImages tar shards extracted to
+  /scratch, then runs mode-aware Qwen3-VL E2E from local hit images. Shard
+  outputs are written to blob with .done markers for resume-safe retries.
+
+target:
+  service: singularity
+  name: msrresrchbasicvc
+  workspace_name: Workspace_NLC
+
+environment:
+  image: amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04
+
+code:
+  local_dir: .
+
+data:
+  local_dir: /datadisk/peiyang/semantitrace_openimages_1m_512/tar_shards_5
+  remote_dir: data/semantitrace_openimages_1m_5tar_20260608
+  storage_id: default
+
+storage:
+  output:
+    storage_account_name: conversationhub
+    container_name: v-peiyangliu
+    mount_dir: /mnt/output
+    is_output: true
+
+jobs:
+  - name: modeb-defense-jpeg-resize-q50
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command: &phase4_modeb_defense_command
+      - |
+        cd /tmp/amlt-code-download 2>/dev/null || cd /mnt/default/code
+        set -euo pipefail
+        PY=/opt/conda/envs/ptca/bin/python
+        if [ ! -x "$$PY" ]; then PY=python; fi
+        "$$PY" -m pip install --upgrade pip wheel setuptools
+        "$$PY" -m pip install -r requirements-real.txt hf-transfer
+        "$$PY" -m pip uninstall -y opencv-python opencv-contrib-python || true
+        "$$PY" -m pip install --force-reinstall --no-deps "opencv-python-headless==4.11.0.86"
+        "$$PY" -m pip install "transformers>=5.9.0" "accelerate>=1.13.0" "open-clip-torch>=3.3.0" "opencv-python-headless>=4.10" "pillow>=12"
+        test -d "$$TAR_ROOT"
+        test -f "$$RECORDS_JSON"
+        test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
+        if [ -f "$$OUTPUT_ROOT/merged/end_to_end_profile_summary.json" ]; then
+          echo "[resume] final summary already exists; skipping $$DEFENSE"
+          exit 0
+        fi
+        "$$PY" - <<'PYCFG'
+        import os, yaml
+        src = "configs/semantitrace_flux2_klein_gradient_guided.yaml"
+        dst = "/tmp/semantitrace_modeaware_e2e.yaml"
+        cfg = yaml.safe_load(open(src, "r", encoding="utf-8"))
+        cfg.setdefault("models", {})
+        cfg["models"]["surrogate_vlm"] = os.environ["UPLOADED_MODEL_SNAPSHOTS"] + "/qwen"
+        with open(dst, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, sort_keys=False)
+        print(open(dst, "r", encoding="utf-8").read())
+        PYCFG
+        LOCAL_ROOT=/scratch/phase4_modeb_$${DEFENSE}
+        LOCAL_IMAGES=$$LOCAL_ROOT/openimages
+        LOCAL_RECORDS=$$LOCAL_ROOT/defended_records
+        LOCAL_TOPK=$$LOCAL_ROOT/topk_merged
+        mkdir -p "$$LOCAL_ROOT" "$$LOCAL_IMAGES" "$$LOCAL_RECORDS" "$$OUTPUT_ROOT/topk_shards" "$$OUTPUT_ROOT/e2e_shards" "$$OUTPUT_ROOT/merged"
+        if [ ! -f "$$LOCAL_ROOT/.openimages_untar.done" ]; then
+          rm -rf "$$LOCAL_IMAGES"
+          mkdir -p "$$LOCAL_IMAGES"
+          echo "[untar] extracting OpenImages tar shards to $$LOCAL_IMAGES"
+          for tar_file in "$$TAR_ROOT"/*.tar; do
+            echo "[untar] $$tar_file"
+            tar -C "$$LOCAL_IMAGES" -xf "$$tar_file"
+          done
+          touch "$$LOCAL_ROOT/.openimages_untar.done"
+        fi
+        "$$PY" scripts/materialize_modeb_defense_records.py \
+          --records "$$RECORDS_JSON" \
+          --record_root "$$RECORD_ROOT" \
+          --output_dir "$$LOCAL_RECORDS" \
+          --defense "$$DEFENSE" \
+          --max_records 500
+        run_topk_shard() {
+          local gpu="$$1"
+          local outdir="$$OUTPUT_ROOT/topk_shards/shard_$${gpu}"
+          if [ -f "$$OUTPUT_ROOT/topk_shards/shard_$${gpu}.done" ]; then
+            echo "[resume] topk shard_$${gpu} already done; skipping"
+            return 0
+          fi
+          mkdir -p "$$outdir"
+          (
+            export CUDA_VISIBLE_DEVICES="$$gpu"
+            "$$PY" scripts/run_unique_clip_topk_shard.py \
+              --records "$$LOCAL_RECORDS/canary_records.json" \
+              --record_root "$$LOCAL_RECORDS" \
+              --distractor_dir "$$LOCAL_IMAGES" \
+              --output_dir "$$outdir" \
+              --file_shard_count 4 \
+              --file_shard_index "$$gpu" \
+              --max_records 500 \
+              --top_k 3 \
+              --batch_size "$$BATCH_SIZE" \
+              --num_workers "$$NUM_WORKERS" \
+              --device cuda
+            touch "$$OUTPUT_ROOT/topk_shards/shard_$${gpu}.done"
+          ) 2>&1 | tee "$$OUTPUT_ROOT/topk_shards/shard_$${gpu}.log"
+        }
+        run_topk_shard 0 & p0=$$!
+        run_topk_shard 1 & p1=$$!
+        run_topk_shard 2 & p2=$$!
+        run_topk_shard 3 & p3=$$!
+        wait $$p0 $$p1 $$p2 $$p3
+        rm -rf "$$LOCAL_TOPK"
+        "$$PY" scripts/run_unique_clip_topk_merge.py \
+          --shards_dir "$$OUTPUT_ROOT/topk_shards" \
+          --output_dir "$$LOCAL_TOPK" \
+          --variant "$$VARIANT" \
+          --top_k 3
+        mkdir -p "$$OUTPUT_ROOT/topk_merged"
+        cp "$$LOCAL_TOPK/unique_topk_summary.json" "$$OUTPUT_ROOT/topk_merged/"
+        cp "$$LOCAL_TOPK/unique_topk_summary.csv" "$$OUTPUT_ROOT/topk_merged/"
+        cp "$$LOCAL_TOPK/unique_topk_hits.jsonl" "$$OUTPUT_ROOT/topk_merged/"
+        run_e2e_shard() {
+          local gpu="$$1"
+          local outdir="$$OUTPUT_ROOT/e2e_shards/shard_$${gpu}"
+          if [ -f "$$OUTPUT_ROOT/e2e_shards/shard_$${gpu}.done" ]; then
+            echo "[resume] e2e shard_$${gpu} already done; skipping"
+            return 0
+          fi
+          mkdir -p "$$outdir"
+          (
+            export CUDA_VISIBLE_DEVICES="$$gpu"
+            "$$PY" scripts/run_mode_aware_e2e_from_topk.py \
+              --records "$$LOCAL_RECORDS/canary_records.json" \
+              --record_root "$$LOCAL_RECORDS" \
+              --hits "$$LOCAL_TOPK/unique_topk_hits.jsonl" \
+              --hit_image_root "$$LOCAL_TOPK/hit_images" \
+              --output_dir "$$outdir" \
+              --profile "$$PROFILE" \
+              --label "$$LABEL" \
+              --variant "$$VARIANT" \
+              --config /tmp/semantitrace_modeaware_e2e.yaml \
+              --max_records 500 \
+              --index_size 1000500 \
+              --top_k 3 \
+              --query_shard_count 4 \
+              --query_shard_index "$$gpu" \
+              --device cuda
+            touch "$$OUTPUT_ROOT/e2e_shards/shard_$${gpu}.done"
+          ) 2>&1 | tee "$$OUTPUT_ROOT/e2e_shards/shard_$${gpu}.log"
+        }
+        run_e2e_shard 0 & q0=$$!
+        run_e2e_shard 1 & q1=$$!
+        run_e2e_shard 2 & q2=$$!
+        run_e2e_shard 3 & q3=$$!
+        wait $$q0 $$q1 $$q2 $$q3
+        "$$PY" scripts/run_mode_aware_e2e_merge.py \
+          --records "$$LOCAL_RECORDS/canary_records.json" \
+          --record_root "$$LOCAL_RECORDS" \
+          --shards_dir "$$OUTPUT_ROOT/e2e_shards" \
+          --output_dir "$$OUTPUT_ROOT/merged" \
+          --profile "$$PROFILE" \
+          --label "$$LABEL" \
+          --variant "$$VARIANT" \
+          --config /tmp/semantitrace_modeaware_e2e.yaml \
+          --max_records 500 \
+          --index_size 1000500 \
+          --top_k 3
+        echo "[done] defense $$DEFENSE complete"
+    submit_args:
+      env: &jpeg_env
+        DEFENSE: jpeg_resize_q50
+        PROFILE: modeb_jpeg_resize_q50_1m_unique
+        LABEL: "Mode-B JPEG/resize Q50 1M unique"
+        VARIANT: modeb_jpeg_resize_q50_clip_1m_unique
+        OUTPUT_ROOT: /mnt/output/semantitrace_phase4_modeb_jpeg_resize_q50_1m_unique_20260609
+        RECORDS_JSON: /mnt/default/data/semantitrace_modeb_n500_records_20260608/nontext_modeb_natural_1m_n500/canary_records_first500.json
+        RECORD_ROOT: /mnt/default/data/semantitrace_modeb_n500_records_20260608
+        TAR_ROOT: /mnt/default/data/semantitrace_openimages_1m_5tar_20260608
+        UPLOADED_MODEL_SNAPSHOTS: /mnt/default/models/semantitrace_model_snapshots_20260603
+        BATCH_SIZE: "512"
+        NUM_WORKERS: "8"
+        HF_HOME: /scratch/hf_cache
+        HUGGINGFACE_HUB_CACHE: /scratch/hf_cache/hub
+        TRANSFORMERS_CACHE: /scratch/hf_cache/transformers
+        HF_HUB_ENABLE_HF_TRANSFER: "1"
+        PIP_CACHE_DIR: /scratch/pip_cache
+        XDG_CACHE_HOME: /scratch/xdg_cache
+        PYTHONUNBUFFERED: "1"
+        TOKENIZERS_PARALLELISM: "false"
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+
+  - name: modeb-defense-oracle-object-blur
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command: *phase4_modeb_defense_command
+    submit_args:
+      env:
+        <<: *jpeg_env
+        DEFENSE: oracle_object_blur
+        PROFILE: modeb_oracle_object_blur_1m_unique
+        LABEL: "Mode-B oracle object blur 1M unique"
+        VARIANT: modeb_oracle_object_blur_clip_1m_unique
+        OUTPUT_ROOT: /mnt/output/semantitrace_phase4_modeb_oracle_object_blur_1m_unique_20260609
+
+  - name: modeb-defense-oracle-object-remove
+    identity: managed
+    sku: NC_A100_v4:1x80G4-A100-NvLink
+    process_count_per_node: 1
+    sla_tier: standard
+    command: *phase4_modeb_defense_command
+    submit_args:
+      env:
+        <<: *jpeg_env
+        DEFENSE: oracle_object_remove
+        PROFILE: modeb_oracle_object_remove_1m_unique
+        LABEL: "Mode-B oracle object remove 1M unique"
+        VARIANT: modeb_oracle_object_remove_clip_1m_unique
+        OUTPUT_ROOT: /mnt/output/semantitrace_phase4_modeb_oracle_object_remove_1m_unique_20260609

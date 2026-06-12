@@ -1,0 +1,94 @@
+# Main experiment config matching the paper protocol.
+#
+# Fill in dataset image directories before running on real MMQA/WebQA.
+# The runner also supports --dry_run_sample to create a small synthetic smoke test.
+
+run:
+  output_dir: "outputs/main_experiment"
+  seed: 42
+  device: "cuda"
+  num_workers: 1
+
+datasets:
+  MMQA:
+    image_dir: null
+    manifest: null
+    max_images: null
+  WebQA:
+    image_dir: null
+    manifest: null
+    max_images: null
+
+protocol:
+  num_canaries: 100
+  num_probe_queries: 3
+  retrieval_top_k: 3
+  dense_eval_subset: 10000
+  significance_level: 0.01
+
+methods:
+  - name: naive
+    type: naive
+  - name: pgd
+    type: pgd
+    epsilon: 0.03137254901960784  # 8/255
+  - name: aqua_acronym
+    type: aqua_acronym
+  - name: aqua_spatial
+    type: aqua_spatial
+  - name: semantitrace
+    type: semantitrace
+    config: "configs/default.yaml"
+
+retrievers:
+  - name: CLIP-ViT-L-14
+    backend: deterministic
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+  - name: SigLIP-SO400M
+    backend: deterministic
+    model_name: "google/siglip-so400m-patch14-384"
+
+generators:
+  - name: Qwen3-VL-8B-Instruct
+    backend: heuristic
+    model_name: "Qwen/Qwen3-VL-8B-Instruct"
+  - name: GPT-5.2
+    backend: endpoint
+    endpoint_env: "SEMANTITRACE_GPT52_ENDPOINT"
+  - name: Gemini-3-Pro
+    backend: endpoint
+    endpoint_env: "SEMANTITRACE_GEMINI3_ENDPOINT"
+
+ood:
+  mahalanobis_percentile: 99.0
+  vlm_filter:
+    enabled: false
+    backend: heuristic
+
+robustness:
+  enabled: true
+  operations:
+    - name: none
+      type: none
+    - name: jpeg_q75
+      type: jpeg
+      quality: 75
+    - name: jpeg_q50
+      type: jpeg
+      quality: 50
+    - name: rescale_0_5
+      type: rescale
+      scale: 0.5
+    - name: gaussian_sigma5
+      type: gaussian_noise
+      sigma: 5.0
+    - name: center_crop_10
+      type: center_crop
+      fraction: 0.1
+
+stealth:
+  compute_lpips: false
+  compute_fid: true
+  compute_psnr: true
+

@@ -1,0 +1,13 @@
+-r requirements.txt
+accelerate>=0.28
+datasets>=2.18
+diffusers>=0.30
+easyocr>=1.7
+faiss-cpu>=1.8
+lpips>=0.1
+open-clip-torch>=2.24
+opencv-python>=4.8
+segment-anything>=1.0
+torch>=2.1
+transformers>=4.57
+
