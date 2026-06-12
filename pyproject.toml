@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "semantitrace-paper"
+name = "semantitrace"
 version = "0.1.0"
-description = "Reference implementation of SemantiTrace for multimodal RAG copyright tracing"
+description = "Reference implementation of SemantiTrace for multimodal RAG provenance auditing"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",

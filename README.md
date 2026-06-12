@@ -1,53 +1,114 @@
 # SemantiTrace
 
-Reference implementation for semantic canary injection and black-box audit
-experiments in multimodal retrieval-augmented generation systems.
+Reference implementation of **SemantiTrace**, an empirical semantic-canary
+auditing system for multimodal retrieval-augmented generation (RAG) databases.
 
-This repository is intentionally code-only. Paper LaTeX sources, compiled PDFs,
-review notes, downloaded literature PDFs, generated figures, large datasets,
-model snapshots, AMLT result directories, and other experiment artifacts are
-kept locally and ignored by Git.
+SemantiTrace studies a **visual-context-preserving** RAG setting: a data owner
+injects sparse, human-plausible visual canaries into benign images, the suspect
+service indexes visual evidence, and the owner later audits whether canary
+signatures can be retrieved and transcribed through the service pipeline.
 
-## What is implemented
+This repository is intentionally **code-only**. Paper LaTeX sources, compiled
+PDFs, review notes, downloaded literature, generated figures, large datasets,
+model snapshots, AMLT result directories, and experiment artifacts are local-only
+and ignored by Git.
 
-The code implements a modular visual-canary auditing pipeline:
+## Current protocol
 
-1. **Anchor mining**: find retrieval-isolated, editable image regions using
-   encoder embeddings, OCR/semantic canvas heuristics, and mask utilities.
-2. **Canary generation**: construct trigger prompts, trap signatures, and probe
-   queries for text-mutation and natural-object insertion modes.
-3. **Semantic injection**: route guidance context into deterministic, inpainting,
-   or FLUX-style editors, including dual retrieval/readability guidance and
-   optional latent mask blending.
-4. **Retrieval and verification**: build visual retrieval indexes, run black-box
-   probe queries, score mode-aware responses, and compute canary extraction
-   statistics.
+The current codebase implements the clean-only, rank-gated audit protocol used by
+the latest SemantiTrace experiments.
 
-Additional modules include Mahalanobis OOD filtering, VLM anomaly prompts,
-baseline overlays, robustness transforms, retrieval-capacity analysis, and
-AMLT job configs for large-scale runs.
+- **Mode A: text mutation** mutates existing scene text with minimal
+  single-glyph or short-token edits.
+- **Mode B: natural-object insertion** inserts a contextually plausible object
+  or object-borne label into a structurally compatible scene canvas.
+- **Signature-blind Mode-B probes** avoid leaking the inserted color, position,
+  font, or full target description in the query. Scene-aware/object-hook query
+  materialization lives in `semantitrace/modeb_queries.py` and
+  `scripts/materialize_modeb_*query_records.py`.
+- **Clean-only baselines** index only distractor images for clean controls; they
+  do not include the unwatermarked anchor image that corresponds to the canary.
+- **Rank-gated scoring** credits a response only when the paired target image is
+  in the retrieved top-k context before signature extraction is counted.
+
+## Latest benchmark snapshot
+
+The result artifacts are not committed, but the scripts/configs in this
+repository correspond to the following latest clean-only reruns.
+
+### End-to-end audit over a 1M unique visual index
+
+| Profile | Scale | R@3 | CER | Clean CER | p-value |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Combined A+B visual index | n=250 | 42.1% | 35.3% | 0.4% | 8.52e-64 |
+| Mode A subset | n=125 | 61.6% | 48.0% | 0.8% | 1.32e-40 |
+| Mode B subset | n=125 | 22.6% | 22.6% | 0.0% | 2.25e-36 |
+| Caption-only indexing | n=1000 | 5.0% | 0.03% | 0.0% | 0.16 |
+| Caption + metadata sidecar | n=1000 | 65.3% | 39.9% | 0.0% | 4.30e-214 |
+
+### Clean-only robustness reruns
+
+| Boundary / transform | Scale | Combined CER | Mode A CER | Mode B CER | Clean CER |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JPEG Q75 | n=250 | 29.1% | 40.0% | 18.1% | 0.0% |
+| Rescale 0.5x | n=250 | 27.5% | 39.5% | 15.5% | 0.0% |
+| Gaussian noise sigma=5 | n=250 | 28.7% | 41.3% | 16.0% | 0.0% |
+| Center crop 10% | n=250 | 28.5% | 37.9% | 19.2% | 0.0% |
+| OCR blur | n=250 | 12.1% | 6.9% | 17.3% | 0.0% |
+| OCR fill | n=250 | 9.1% | 0.0% | 18.1% | 0.0% |
+
+Caption-only normalization is therefore treated as an architectural boundary for
+pixel-level canaries, while sidecar-preserving RAG restores a strong provenance
+channel.
 
 ## Repository layout
 
 ```text
-semantitrace/        Core Python package.
-scripts/            Experiment, evaluation, data-preparation, and AMLT helper scripts.
-configs/            Local and AMLT YAML configs.
-tests/              Lightweight unit tests.
-requirements*.txt   Base and real-model dependencies.
+semantitrace/        Core Python package and audit primitives.
+scripts/            Data preparation, retrieval, scoring, merge, and AMLT helpers.
+configs/            Local and AMLT YAML configs for large-scale experiments.
+tests/              Lightweight unit tests for scoring, query filtering, and pipeline logic.
+requirements.txt    Minimal runtime dependencies.
+requirements-real.txt
+                    Optional real-model dependencies for CLIP/VLM/diffusion runs.
 ```
 
-Ignored local-only paths include `SemantiTrace_ICDE2027/`, `outputs/`,
-`pdfs/`, `data*/`, `amlt_*/`, model caches, and generated archives.
+Ignored local-only paths include `SemantiTrace_ICDE2027/`, `outputs/`, `pdfs/`,
+`data*/`, `datasets/`, `amlt_*/`, `amlt_results/`, model caches, generated
+archives, and submission bundles.
 
-## Quick start
+## Installation
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+For real-model experiments:
+
+```bash
+pip install -r requirements-real.txt
+```
+
+The real-model scripts expect externally managed datasets, model caches, and
+service credentials. Do not commit those files; keep them under ignored local
+paths or remote experiment storage.
+
+## Quick checks
 
 ```bash
 python -m compileall -q semantitrace scripts tests
 python -m unittest discover -s tests
 ```
 
-For the deterministic local pipeline:
+Focused tests for the clean-only/rank-gated changes:
+
+```bash
+python -m unittest tests.test_verification tests.test_modeb_queries
+```
+
+## Local deterministic run
 
 ```bash
 python scripts/run_main_experiment.py \
@@ -57,16 +118,23 @@ python scripts/run_main_experiment.py \
   --device cpu
 ```
 
-For real-model runs, install the optional dependencies and select a real config:
+## Real-model and AMLT runs
 
-```bash
-pip install -r requirements-real.txt
-python scripts/run_main_experiment.py \
-  --config configs/main_experiment_real.yaml \
-  --output_dir outputs/main_real \
-  --device cuda
-```
+Large-scale runs are driven by AMLT configs in `configs/`. The most recent
+clean-only configs are:
 
-Large-scale profiles are submitted through AMLT configs in `configs/`; generated
-outputs should remain under ignored local or remote storage paths rather than
-being committed.
+- `configs/amlt_semantitrace_modeb_llmquery_sceneaware_v18_cleanonly_msrresrchvc_a100_parallel.yaml`
+- `configs/amlt_semantitrace_cleanonly_robustness_a100.yaml`
+- `configs/amlt_semantitrace_cleanonly_caption_boundary_a100.yaml`
+
+For AMLT jobs, keep outputs in remote result storage or ignored local folders.
+The clean-only runs are designed to be resumable and avoid reading many small
+files directly from blob storage: pack inputs as tar bundles, copy/extract them
+locally inside the job, and write final outputs back to blob/result storage.
+
+## Public-repo hygiene
+
+This public repository intentionally contains only source code, tests, and
+configuration templates. Do not add paper sources, compiled manuscripts,
+downloaded datasets, generated figures, model checkpoints, AMLT results, or
+private review artifacts to Git.
