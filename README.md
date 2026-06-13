@@ -132,6 +132,11 @@ The clean-only runs are designed to be resumable and avoid reading many small
 files directly from blob storage: pack inputs as tar bundles, copy/extract them
 locally inside the job, and write final outputs back to blob/result storage.
 
+The public repo intentionally keeps only the current workflow entry points. Older
+phase-style configs, retry-only configs, object-hook/scene-hook intermediate
+Mode-B experiments, obsolete n-scaling launches, and generated artifact/data
+snapshots are not part of the public code release.
+
 ## Public-repo hygiene
 
 This public repository intentionally contains only source code, tests, and

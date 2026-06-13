@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser("SemantiTrace Mode B (natural object insertion) real canary generator.")
     parser.add_argument(
         "--source_records",
-        default="amlt_n500_upgrade_data/records/canary_records_first500.json",
+        default="outputs/modeb_anchor_pool/canary_records_first500.json",
     )
     parser.add_argument("--output_dir", default="outputs/nontext_modeb_natural_smoke_n10")
     parser.add_argument("--config", default="configs/semantitrace_flux2_klein_gradient_guided.yaml")

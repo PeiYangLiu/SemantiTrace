@@ -17,7 +17,6 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_final_rag_verify import build_clients, rag_prompt
 from run_pipeline_generality import (
     IndexEntry,
     OpenCLIPScorer,
@@ -33,6 +32,8 @@ from run_pipeline_generality import (
     resolve,
     zscore,
 )
+from semantitrace.backends.real import OpenCLIPEncoder, QwenVLMClient
+from semantitrace.config import load_config
 from semantitrace.metrics import normalize_text
 from semantitrace.mode_verification import (
     detail_response_hit,
@@ -41,9 +42,35 @@ from semantitrace.mode_verification import (
     score_response,
     target_rank_in_topk,
 )
+from semantitrace.verification import Verifier
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def rag_prompt(query: str) -> str:
+    return (
+        "Answer the user using the retrieved visual evidence. "
+        "If text is visible, transcribe it exactly.\n\n"
+        f"User query: {query}"
+    )
+
+
+def build_clients(config_path: str, device: str) -> tuple[OpenCLIPEncoder, QwenVLMClient, Verifier]:
+    cfg = load_config(config_path)
+    models = cfg.get("models", {})
+    vlm_cfg = cfg.get("vlm", {})
+    encoder = OpenCLIPEncoder(
+        model_name=models.get("clip_model", "ViT-L-14"),
+        pretrained=models.get("clip_pretrained", "openai"),
+        device=device,
+    )
+    vlm = QwenVLMClient(
+        model_name=models.get("surrogate_vlm", "Qwen/Qwen3-VL-8B-Instruct"),
+        device=device,
+        torch_dtype=vlm_cfg.get("torch_dtype", "bfloat16"),
+    )
+    return encoder, vlm, Verifier(cfg.get("verification", {}))
 
 
 @dataclass

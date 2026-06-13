@@ -1,5 +1,5 @@
 description: |
-  H100 parallel-query retry of Mode-B natural-object 1M-unique evaluation with VLM-generated audit
+  Clean-only Mode-B natural-object 1M-unique evaluation with VLM-generated audit
   queries that do not reveal the full color/object/location signature. The job
   materializes revised records, extracts OpenImages tar shards to /scratch,
   runs exact CLIP top-k export, then runs Qwen3-VL mode-aware E2E from local
@@ -45,7 +45,7 @@ jobs:
         test -f "$$MODEB_DATA_ROOT/nontext_modeb_natural_1m_n500/canary_records_first500.json"
         test -d "$$UPLOADED_MODEL_SNAPSHOTS/qwen"
 
-        LOCAL_ROOT=/scratch/modeb_llmquery_retry
+        LOCAL_ROOT=/scratch/modeb_sceneaware_v18_cleanonly
         LOCAL_IMAGES=$$LOCAL_ROOT/images
         LOCAL_RECORDS_DIR=$$LOCAL_ROOT/records
         LOCAL_RECORDS=$$LOCAL_RECORDS_DIR/canary_records_first500_llmquery.json
@@ -220,7 +220,7 @@ jobs:
           --max_records 500 \
           --index_size 1000500 \
           --top_k "$$TOP_K"
-        echo "[done] Mode-B LLM-query retry complete"
+        echo "[done] Mode-B scene-aware v18 clean-only evaluation complete"
     submit_args:
       env:
         TAR_ROOT: /mnt/default/data/semantitrace_openimages_1m_5tar_20260608

@@ -103,13 +103,11 @@ def summarize_attempts(records: list[dict[str, Any]], rejected: list[dict[str, A
         "projected_attempts_for_target": projected_attempts,
         "projected_single_a100_gpu_hours": projected_attempts * seconds_per_attempt / 3600.0,
         "projected_wall_clock_hours_with_8_a100": projected_attempts * seconds_per_attempt / 3600.0 / 8.0,
-        "canonical_n500_launch_command": (
-            "python3 scripts/run_injection.py --dataset_dir data/mmqa/images "
-            "--output_dir outputs/flux2_klein_gradient_guided_n500_canonical_v1 "
-            "--config configs/semantitrace_flux2_klein_gradient_guided.yaml "
-            "--num_canaries 500 --device cuda --resume"
+        "capacity_budget_note": (
+            "The 500-canary capacity budget is a projection from measured cascade "
+            "acceptance rates; generation should be launched through the current "
+            "Mode-A/Mode-B materialization scripts and clean-only AMLT configs."
         ),
-        "n500_note": "This command is provided for a canonical long run; projected single-A100 time is estimated from the completed n=100 FLUX.2 run.",
     }
 
 

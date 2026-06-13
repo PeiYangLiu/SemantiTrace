@@ -16,10 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from run_cached_100k_e2e_profile import build_vlm, summarize
 from run_end_to_end_profiles import image_context_prompt, make_montage
+from run_mode_aware_e2e_from_topk import build_vlm, summarize
 from run_pipeline_generality import load_records, resolve
 from semantitrace.metrics import contains_positive_signature
+from semantitrace.mode_verification import score_response
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,6 +64,7 @@ def main() -> None:
             if flat_idx < skip:
                 continue
             record_index = int(row["record_index"])
+            record = records[record_index]
             signature = str(row["signature"])
             query = str(row["query"])
             wm_context_path = make_montage(
@@ -78,14 +80,34 @@ def main() -> None:
             prompt = image_context_prompt(query)
             watermarked_response = vlm.generate(Image.open(wm_context_path).convert("RGB"), prompt, temperature=0.0, max_new_tokens=args.max_new_tokens)
             clean_response = vlm.generate(Image.open(clean_context_path).convert("RGB"), prompt, temperature=0.0, max_new_tokens=args.max_new_tokens)
+            wm_score = score_response(watermarked_response, record)
+            clean_score = score_response(clean_response, record)
+            watermarked_response_hit = bool(wm_score["hit"])
+            clean_response_hit = bool(clean_score["hit"])
+            watermarked_response_strict_hit = bool(wm_score.get("strict_hit", wm_score["hit"]))
+            clean_response_strict_hit = bool(clean_score.get("strict_hit", clean_score["hit"]))
+            watermarked_target_in_topk = int(row["target_rank"]) <= args.top_k
+            clean_target_in_topk = int(row["clean_target_rank"]) <= args.top_k
             detail = {
                 **row,
                 "watermarked_context_path": str(wm_context_path.relative_to(ROOT)),
                 "clean_context_path": str(clean_context_path.relative_to(ROOT)),
                 "watermarked_response": watermarked_response,
                 "clean_response": clean_response,
-                "watermarked_hit": contains_positive_signature(watermarked_response, signature),
-                "clean_hit": contains_positive_signature(clean_response, signature),
+                "watermarked_score": wm_score,
+                "clean_score": clean_score,
+                "watermarked_target_in_topk": watermarked_target_in_topk,
+                "clean_target_in_topk": clean_target_in_topk,
+                "watermarked_response_hit": watermarked_response_hit,
+                "clean_response_hit": clean_response_hit,
+                "watermarked_response_strict_hit": watermarked_response_strict_hit,
+                "clean_response_strict_hit": clean_response_strict_hit,
+                "watermarked_hit": bool(watermarked_response_hit and watermarked_target_in_topk),
+                "clean_hit": bool(clean_response_hit and clean_target_in_topk),
+                "watermarked_strict_hit": bool(watermarked_response_strict_hit and watermarked_target_in_topk),
+                "clean_strict_hit": bool(clean_response_strict_hit and clean_target_in_topk),
+                "watermarked_ungated_hit": contains_positive_signature(watermarked_response, signature),
+                "clean_ungated_hit": contains_positive_signature(clean_response, signature),
             }
             fh.write(json.dumps(detail, ensure_ascii=False) + "\n")
             fh.flush()
@@ -96,23 +118,16 @@ def main() -> None:
         top_k = args.top_k
         max_records = len(records)
 
-    summary = summarize(details, records, verifier, Args)
-    summary.update(
-        {
-            "profile": args.profile,
-            "label": args.label,
-            "variant": args.variant,
-            "index_size": args.index_size,
-            "description": f"{args.label} index -> top-k image context -> Qwen3-VL generation",
-        }
-    )
-    (profile_dir / "end_to_end_report.json").write_text(json.dumps({"summary": summary, "details": details}, indent=2, ensure_ascii=False), encoding="utf-8")
-    (out_dir / "end_to_end_profile_summary.json").write_text(json.dumps([summary], indent=2, ensure_ascii=False), encoding="utf-8")
+    summary_rows = summarize(details, records, verifier, Args)
+    for row in summary_rows:
+        row["description"] = f"{args.label} index -> top-k image context -> Qwen3-VL generation"
+    (profile_dir / "end_to_end_report.json").write_text(json.dumps({"summary": summary_rows, "details": details}, indent=2, ensure_ascii=False), encoding="utf-8")
+    (out_dir / "end_to_end_profile_summary.json").write_text(json.dumps(summary_rows, indent=2, ensure_ascii=False), encoding="utf-8")
     with (out_dir / "end_to_end_profile_summary.csv").open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(summary.keys()))
+        writer = csv.DictWriter(fh, fieldnames=list(summary_rows[0].keys()))
         writer.writeheader()
-        writer.writerow(summary)
-    print(json.dumps(summary, indent=2, ensure_ascii=False), flush=True)
+        writer.writerows(summary_rows)
+    print(json.dumps(summary_rows, indent=2, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

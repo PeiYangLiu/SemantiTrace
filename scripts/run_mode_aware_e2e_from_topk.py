@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from run_cached_100k_e2e_profile import build_vlm
 from run_end_to_end_profiles import image_context_prompt, make_montage
+from semantitrace.backends.real import QwenVLMClient
+from semantitrace.config import load_config
 from semantitrace.mode_verification import (
     detail_response_hit,
     detail_target_gated_hit,
@@ -25,6 +26,7 @@ from semantitrace.mode_verification import (
     target_rank_in_topk,
 )
 from semantitrace.records import infer_record_mode, load_records_with_resolved_paths, resolve_repo_path
+from semantitrace.verification import Verifier
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,6 +75,20 @@ def remap_hits(hits: list[dict[str, Any]], hit_image_root: Path) -> list[dict[st
         row["image_path"] = str(remap_hit_path(row["image_path"], hit_image_root))
         out.append(row)
     return out
+
+
+def build_vlm(config_path: str, device: str) -> tuple[QwenVLMClient, Verifier]:
+    cfg = load_config(config_path)
+    models = cfg.get("models", {})
+    vlm_cfg = cfg.get("vlm", {})
+    vlm = QwenVLMClient(
+        model_name=models.get("surrogate_vlm", "Qwen/Qwen3-VL-8B-Instruct"),
+        device=device,
+        torch_dtype=vlm_cfg.get("torch_dtype", "bfloat16"),
+    )
+    verifier = Verifier(cfg.get("verification", {}))
+    verifier.num_probes_per_canary = min(verifier.num_probes_per_canary, 3)
+    return vlm, verifier
 
 
 def summarize_subset(
