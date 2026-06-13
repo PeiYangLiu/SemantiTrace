@@ -85,10 +85,9 @@ def _object_hint(object_class: str) -> str:
 def modeb_forbidden_terms(record: dict[str, Any], *, allow_object_term: bool = False) -> list[str]:
     plan = record.get("nontext_plan") if isinstance(record.get("nontext_plan"), dict) else {}
     terms = []
-    values = [plan.get("color"), plan.get("position_region")]
+    values = [plan.get("color"), plan.get("position_region"), record.get("trap_signature")]
     if not allow_object_term:
         values.append(plan.get("object_class"))
-        values.append(record.get("trap_signature"))
     for value in values:
         cleaned = _clean_text(value).lower()
         if cleaned:

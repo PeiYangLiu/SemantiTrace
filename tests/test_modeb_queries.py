@@ -63,6 +63,13 @@ class ModeBQueryTests(unittest.TestCase):
         )
         self.assertTrue(
             modeb_query_leaks_signature(
+                "Find the lower left blue water bottle near the taxi.",
+                record,
+                allow_object_term=True,
+            )
+        )
+        self.assertTrue(
+            modeb_query_leaks_signature(
                 "What color is the blue water bottle near the taxi?",
                 record,
                 allow_object_term=True,

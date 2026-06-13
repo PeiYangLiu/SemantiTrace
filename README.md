@@ -22,8 +22,10 @@ the latest SemantiTrace experiments.
   single-glyph or short-token edits.
 - **Mode B: natural-object insertion** inserts a contextually plausible object
   or object-borne label into a structurally compatible scene canvas.
-- **Signature-blind Mode-B probes** avoid leaking the inserted color, position,
-  font, or full target description in the query. Scene-aware/object-hook query
+- **Signature-blind Mode-B probes** forbid the full target signature and avoid
+  leaking the inserted color, position, or font. Some scene-aware runs allow the
+  generic object noun as a natural retrieval hook, but still reject the complete
+  color/object/location signature. Scene-aware query
   materialization lives in `semantitrace/modeb_queries.py` and
   `scripts/materialize_modeb_*query_records.py`.
 - **Clean-only baselines** index only distractor images for clean controls; they
@@ -44,7 +46,7 @@ repository correspond to the following latest clean-only reruns.
 | Mode A subset | n=125 | 61.6% | 48.0% | 0.8% | 1.32e-40 |
 | Mode B clean-only | n=500 | 22.6% | 22.6% protected-image hit | 0.0% | 1.29e-32 |
 | Caption-only indexing | n=1000 | 5.0% | 0.03% | 0.0% | 0.16 |
-| Caption + metadata sidecar | n=1000 | 65.3% | 39.9% | 0.0% | 4.30e-214 |
+| Caption + explicit provenance sidecar | n=1000 | 65.3% | 39.9% | 0.0% | 4.30e-214 |
 
 The composite A+B row is an operating-point overview, not a separately pooled
 hypothesis test. Mode A reports rank-gated signature extraction CER; Mode B
@@ -63,8 +65,9 @@ string extraction retained as a diagnostic.
 | OCR fill | n=250 | 9.1% | 0.0% | 18.1% | 0.0% |
 
 Caption-only normalization is therefore treated as an architectural boundary for
-pixel-level canaries, while sidecar-preserving RAG restores a strong provenance
-channel.
+pixel-level canaries, while an explicit canary-bearing provenance sidecar
+restores a strong provenance channel. The sidecar row is not a signature-blind
+caption-only setting; it models systems that retain explicit provenance metadata.
 
 ## Repository layout
 

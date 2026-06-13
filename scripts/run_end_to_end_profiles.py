@@ -109,10 +109,10 @@ PROFILE_DEFS: dict[str, dict[str, Any]] = {
         "description": "BLIP captions -> text retrieval -> text-only generator",
     },
     "caption_sidecar": {
-        "label": "Caption-sidecar RAG",
+        "label": "Caption + explicit provenance sidecar RAG",
         "variant": "blip_caption_sidecar",
         "context": "text_context",
-        "description": "BLIP captions + sidecar provenance field -> text retrieval -> text-only generator",
+        "description": "BLIP captions + explicit canary-bearing provenance sidecar -> text retrieval -> text-only generator",
     },
 }
 
