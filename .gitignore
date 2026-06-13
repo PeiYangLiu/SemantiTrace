@@ -38,7 +38,7 @@ amlt_hf_cache/
 amlt_model_snapshots/
 cache/
 checkpoints/
-models/
+/models/
 wandb/
 
 # AMLT/local generated bundles and downloaded results

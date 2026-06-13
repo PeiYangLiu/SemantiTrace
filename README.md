@@ -38,13 +38,18 @@ repository correspond to the following latest clean-only reruns.
 
 ### End-to-end audit over a 1M unique visual index
 
-| Profile | Scale | R@3 | CER | Clean CER | p-value |
+| Profile | Scale | R@3 | Audit signal | Clean baseline | p-value |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Combined A+B visual index | n=250 | 42.1% | 35.3% | 0.4% | 8.52e-64 |
+| Composite A+B overview | Mode A n=125 + Mode B clean-only n=500 | 42.1% | 35.3% | 0.4% | see split rows |
 | Mode A subset | n=125 | 61.6% | 48.0% | 0.8% | 1.32e-40 |
-| Mode B subset | n=125 | 22.6% | 22.6% | 0.0% | 2.25e-36 |
+| Mode B clean-only | n=500 | 22.6% | 22.6% protected-image hit | 0.0% | 1.29e-32 |
 | Caption-only indexing | n=1000 | 5.0% | 0.03% | 0.0% | 0.16 |
 | Caption + metadata sidecar | n=1000 | 65.3% | 39.9% | 0.0% | 4.30e-214 |
+
+The composite A+B row is an operating-point overview, not a separately pooled
+hypothesis test. Mode A reports rank-gated signature extraction CER; Mode B
+reports clean-only target-in-top-3 protected-image hits, with response-only
+string extraction retained as a diagnostic.
 
 ### Clean-only robustness reruns
 
