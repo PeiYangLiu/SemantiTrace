@@ -83,7 +83,7 @@ class VLMAnomalyFilter:
     def inspect(self, image: Image.Image) -> VLMFilterResult:
         raw = self.vlm.generate(image, self.prompt, temperature=0.0, max_new_tokens=512)
         verdict = raw.upper()
-        rejected = "[VERDICT: ANOMALY]" in verdict or "ANOMALY" in verdict and "SAFE" not in verdict
+        rejected = "[VERDICT: ANOMALY]" in verdict or ("ANOMALY" in verdict and "SAFE" not in verdict)
         return VLMFilterResult(rejected=rejected, raw_response=raw)
 
 

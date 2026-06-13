@@ -94,7 +94,6 @@ def _make_compare_panel(
             crop_clean = clean.crop((cx1, cy1, cx2, cy2)).convert("RGB")
             crop_wm = watermarked.crop((cx1, cy1, cx2, cy2)).convert("RGB")
             cw, ch = crop_clean.size
-            zoom = min(target_h // 2, max_zoom_w * ch // max(1, cw)) if cw else target_h // 2
             zoom_h = min(target_h // 2, 400)
             zoom_w = max(1, int(cw * zoom_h / max(1, ch)))
             zoom_w = min(zoom_w, max_zoom_w)
@@ -255,7 +254,7 @@ class SemantiTracePipeline:
         readability_gate_enabled = bool(readability_cfg.get("enabled", False))
         naturalness_cfg = self.config.get("naturalness_gate", {})
         naturalness_gate_enabled = bool(naturalness_cfg.get("enabled", False))
-        for idx, anchor in enumerate(anchors):
+        for anchor in anchors:
             if len(records) >= num_canaries:
                 break
             if str(anchor.image_path) in processed_anchor_paths:

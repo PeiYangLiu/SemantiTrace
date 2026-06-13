@@ -204,7 +204,6 @@ class CanaryGenerator:
         signature = self._random_acronym()
         if preferred_mode == "text" or canvas.mode == "text":
             mode = "Text Mutation"
-            original = canvas.text or "TEXT"
         else:
             mode = "Object Insertion"
         signature = self._style_matched_signature(canvas, mode, signature)

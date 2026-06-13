@@ -29,7 +29,7 @@ real = [
   "opencv-python>=4.8",
   "segment-anything>=1.0",
   "torch>=2.1",
-  "transformers>=4.40",
+  "transformers>=4.57",
 ]
 
 [tool.setuptools.packages.find]
