@@ -113,7 +113,36 @@ Focused tests for the clean-only/rank-gated changes:
 python -m unittest tests.test_verification tests.test_modeb_queries
 ```
 
-## Local deterministic run
+## Local clean-only protocol pipeline
+
+The paper-scale runs use external image corpora, CLIP/Qwen checkpoints, and AMLT
+for throughput. The public repository also includes a fully local deterministic
+pipeline that exercises the same clean-only/rank-gated protocol without external
+services, GPUs, model downloads, or datasets:
+
+```bash
+python scripts/run_local_cleanonly_pipeline.py \
+  --output_dir outputs/local_cleanonly_pipeline \
+  --num_mode_a 4 \
+  --num_mode_b 4 \
+  --num_distractors 16 \
+  --top_k 3
+```
+
+It writes:
+
+- `local_cleanonly_records.json`
+- `local_cleanonly_details.jsonl`
+- `local_cleanonly_summary.json`
+- `local_cleanonly_summary.csv`
+
+This local pipeline is a protocol smoke test, not a substitute for the
+paper-scale 1M-index numbers. It verifies that the release can run end to end
+with distractor-only clean indexes, Mode-A rank-gated extraction, Mode-B
+protected-image hits, local robustness transforms, and caption-only/sidecar
+boundary behavior.
+
+## Deterministic main-experiment dry run
 
 ```bash
 python scripts/run_main_experiment.py \
